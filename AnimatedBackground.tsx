@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 
-const useFluidCursor = (canvas: HTMLCanvasElement) => {
+const useFluidCursor = (canvas: HTMLCanvasElement, theme: 'dark' | 'light') => {
   if (!canvas) return;
   
   // Accessibility: Check for prefers-reduced-motion
@@ -15,6 +15,11 @@ const useFluidCursor = (canvas: HTMLCanvasElement) => {
   };
   
   let animationFrameId: number;
+  
+  // Configuration adjusted for theme
+  // Light mode: High brightness (1.0) -> Inverted against White -> Black Ink
+  // Dark mode: Moderate brightness (0.3) -> Additive against Black -> Glowing Ink
+  const colorMult = theme === 'light' ? 1.0 : 0.3;
   
   let config = {
     SIM_RESOLUTION: 128,
@@ -51,6 +56,8 @@ const useFluidCursor = (canvas: HTMLCanvasElement) => {
   pointers.push(new (pointerPrototype as any)());
 
   const { gl, ext } = getWebGLContext(canvas);
+
+  if (!gl) return; // Guard against context failure
 
   if (!ext.supportLinearFiltering) {
     config.DYE_RESOLUTION = 256;
@@ -909,7 +916,6 @@ const useFluidCursor = (canvas: HTMLCanvasElement) => {
 
     const dt = calcDeltaTime();
     // PERF FIX: Removed resizeCanvas from animation loop to prevent layout thrashing
-    // if (resizeCanvas()) initFramebuffers(); 
     updateColors(dt);
     applyInputs();
     step(dt);
@@ -1235,9 +1241,10 @@ const useFluidCursor = (canvas: HTMLCanvasElement) => {
 
   function generateColor() {
     let c = HSVtoRGB(Math.random(), 1.0, 1.0);
-    c.r *= 0.15;
-    c.g *= 0.15;
-    c.b *= 0.15;
+    // Adjust brightness based on theme configuration
+    c.r *= colorMult;
+    c.g *= colorMult;
+    c.b *= colorMult;
     return c;
   }
 
@@ -1326,11 +1333,16 @@ const FluidBackground = ({ theme }: { theme: 'dark' | 'light' }) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     
-    const cleanup = useFluidCursor(canvas);
+    // Pass theme to the hook to adjust visuals and config
+    const cleanup = useFluidCursor(canvas, theme);
     return cleanup;
-  }, [theme]); // Re-initialize when theme changes
+  }, [theme]); 
 
-  return <canvas ref={canvasRef} className="fixed inset-0 z-[1] pointer-events-none w-full h-full mix-blend-screen" />;
+  // Use mix-blend-exclusion for light mode to create visible 'ink' effect (softer than difference)
+  // Use mix-blend-screen for dark mode to create 'glow' effect
+  const blendMode = theme === 'dark' ? 'mix-blend-screen' : 'mix-blend-exclusion';
+
+  return <canvas ref={canvasRef} className={`fixed inset-0 z-[1] pointer-events-none w-full h-full ${blendMode}`} />;
 };
 
 export default FluidBackground;
