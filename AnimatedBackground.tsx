@@ -1,11 +1,13 @@
 import React, { useEffect, useRef } from 'react';
 
+type FluidCursorStatus = 'running' | 'reduced-motion' | 'retry';
+
 const useFluidCursor = (canvas: HTMLCanvasElement, theme: 'dark' | 'light') => {
-  if (!canvas) return;
+  if (!canvas) return { status: 'retry' } as const;
   
   // Accessibility: Check for prefers-reduced-motion
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (prefersReducedMotion) return;
+  if (prefersReducedMotion) return { status: 'reduced-motion' } as const;
 
   // Cleanup trackers
   const listeners: { target: Window | HTMLElement; event: string; handler: any }[] = [];
@@ -57,7 +59,7 @@ const useFluidCursor = (canvas: HTMLCanvasElement, theme: 'dark' | 'light') => {
 
   const { gl, ext } = getWebGLContext(canvas);
 
-  if (!gl) return; // Guard against context failure
+  if (!gl) return { status: 'retry' } as const; // Guard against context failure
 
   if (!ext.supportLinearFiltering) {
     config.DYE_RESOLUTION = 256;
@@ -903,6 +905,9 @@ const useFluidCursor = (canvas: HTMLCanvasElement, theme: 'dark' | 'light') => {
   initFramebuffers();
   // Initial resize
   resizeCanvas();
+  if (canvas.width === 0 || canvas.height === 0) {
+    return { status: 'retry' } as const;
+  }
 
   let lastUpdateTime = Date.now();
   let colorUpdateTimer = 0.0;
@@ -949,6 +954,13 @@ const useFluidCursor = (canvas: HTMLCanvasElement, theme: 'dark' | 'light') => {
     }
   }
   addListener(window, 'resize', handleResize);
+
+  const handleVisibilityChange = () => {
+    if (!document.hidden) {
+      handleResize();
+    }
+  };
+  addListener(document, 'visibilitychange', handleVisibilityChange as any);
 
   function updateColors(dt: any) {
     colorUpdateTimer += dt * config.COLOR_UPDATE_SPEED;
@@ -1318,12 +1330,14 @@ const useFluidCursor = (canvas: HTMLCanvasElement, theme: 'dark' | 'light') => {
   }
   
   // Return cleanup function
-  return () => {
+  const cleanup = () => {
     listeners.forEach(({ target, event, handler }) => {
       target.removeEventListener(event, handler);
     });
     if (animationFrameId) cancelAnimationFrame(animationFrameId);
   };
+
+  return { status: 'running', cleanup } as const;
 };
 
 const FluidBackground = ({ theme }: { theme: 'dark' | 'light' }) => {
@@ -1333,9 +1347,32 @@ const FluidBackground = ({ theme }: { theme: 'dark' | 'light' }) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     
-    // Pass theme to the hook to adjust visuals and config
-    const cleanup = useFluidCursor(canvas, theme);
-    return cleanup;
+    let cleanup: (() => void) | undefined;
+    let rafId: number | undefined;
+    let attemptCount = 0;
+    const maxAttempts = 120;
+
+    const start = () => {
+      attemptCount += 1;
+      const result = useFluidCursor(canvas, theme);
+      if (result?.status === 'running') {
+        cleanup = result.cleanup;
+        return;
+      }
+      if (result?.status === 'reduced-motion') {
+        return;
+      }
+      if (attemptCount < maxAttempts) {
+        rafId = requestAnimationFrame(start);
+      }
+    };
+
+    start();
+
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      if (cleanup) cleanup();
+    };
   }, [theme]); 
 
   // Use mix-blend-exclusion for light mode to create visible 'ink' effect (softer than difference)
